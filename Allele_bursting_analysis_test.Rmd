@@ -1,0 +1,234 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#Load libraries
+library(edgeR)
+library(dplyr)
+library(Map2NCBI)
+library(splitstackshape)
+library(devtools)
+library(SCALE)
+library(stringr)
+library(data.table)
+library(rlist)
+```
+
+
+```{r}
+setwd("C:/Users/mattg/Desktop/Lab Data/West Lab/Bursting scRNAseq/OutputfromPreprocessing/")
+
+VCF_input=read.table("variants_DP.table")
+colnames(VCF_input)=c("CHROM","POS")
+VCF_input$CHROMPOS=paste(VCF_input$CHROM,VCF_input$POS,sep=",")
+```
+
+```{r}
+#Set WD and load in merged VCF file
+
+setwd("C:/Users/mattg/Desktop/Lab Data/West Lab/Bursting scRNAseq/OutputfromPreprocessing/Tables")
+
+files=list.files(path='C:/Users/mattg/Desktop/Lab Data/West Lab/Bursting scRNAseq/OutputfromPreprocessing/Tables', pattern = '.table', full.names=TRUE, recursive=FALSE)
+
+Merged_VCF=lapply(files,function(x){
+  readfile=read.table(x, header=TRUE)
+  y=gsub(pattern="C:/Users/mattg/Desktop/Lab Data/West Lab/Bursting scRNAseq/OutputfromPreprocessing/Tables/",replacement="",x=x)
+  y=gsub(pattern="AcceptedHits_Cigar.bam.vcf.table",replacement="",x=y)
+  readfile$CHROMPOS=paste(readfile$CHROM,readfile$POS,sep=",")
+  colnames(readfile)=paste(y,colnames(readfile),sep="_")
+  Name=grep("CHROMPOS$",colnames(readfile),value=TRUE)
+  Name_2=grep("CHROMPOS$",colnames(VCF_input),value=TRUE)[1]
+  DP4=which(grepl("DP4$",colnames(readfile)))
+  CHROMPOS=which(grepl("CHROMPOS$",colnames(readfile)))
+  readfile=readfile[,c(DP4,CHROMPOS)]
+  VCF_input=right_join(readfile,VCF_input,by=setNames(Name_2,Name))
+  CHROMPOS=which(grepl("CHROMPOS$",colnames(VCF_input)))
+  VCF_input=VCF_input %>% distinct(VCF_input[,CHROMPOS], .keep_all = TRUE)
+})
+
+
+#big_data=list.cbind(VCF_input)
+```
+
+```{r}
+######Only have to do this once, should save workspace or file that it generates so you can access it offline
+GeneList=GetGeneList("Mus musculus",latest=TRUE,savefiles=TRUE,destfile=getwd())
+genelist_2=read.delim("full_feature_table.txt",sep="\t")
+```
+
+```{r}
+#Load in file from excel with gene names
+setwd('C:/Users/mattg/Desktop')
+parsefile=read.csv('testingg.csv')
+
+
+```
+
+```{r}
+#split first gene name column and just take first value
+parse=as.data.frame(cSplit(parsefile,1,sep=";",direction="wide"))
+parsefile=parse[,2:3]
+#remove all everything before "-" to get position in position column
+parsefile$GL456211.1.69352.69353=gsub(":*-",",",parsefile$GL456211.1.69352.69353)
+parse=as.data.frame(cSplit(parsefile,1,sep=",",direction="wide"))
+parse$GL456211.1.69352.69353_1=gsub(":.*","",parse$GL456211.1.69352.69353_1)
+```
+
+```{r}
+setwd('C:/Users/mattg/Desktop/')
+write.table(parse,"parse_Glut")
+```
+
+
+
+```{r}
+#####Tidy up data and do a little exploring/Make MapMarkers file
+#tidy up column names and remove the first row
+colnames(VCF_input)=unlist(VCF_input[1,])
+VCF_input=VCF_input[-1,]
+row.names(VCF_input)=1:nrow(VCF_input)
+
+#Remove 'chr' from each chromosome number by making a new column, to be used for 'MapMarkers'
+VCF_input$Chr=gsub("chr","",VCF_input[,1])
+
+###Ultimately add in $gene column with name of things corresponding closest to chromosome position of allele
+
+#Make marker map file (df)
+Marker_map=VCF_input[,c(2,3,(ncol(VCF_input)))]
+colnames(Marker_map)=c("position","Marker","chromosome")
+Marker_map$position=as.numeric(as.character(Marker_map$position))
+Marker_map$chromosome=as.numeric(Marker_map$chromosome)
+Marker_mapfile=MapMarkers(features=GeneList,markers=Marker_map,nAut=19,other=FALSE,savefiles=TRUE,destfile=getwd())
+#Look around to see what genes you have
+Symbols=unique(Marker_mapfile$symbol)
+GeneIDs=unique(Marker_mapfile$GeneID)
+Totalgenes=unique(GeneList$symbol)
+Arc=which("Arc"%in%Marker_mapfile$symbol)
+Arc
+
+#Get gene names from GeneList based off of matching chromosome and position numbers
+VCF_input$ChromPOS=paste(VCF_input$Chr,VCF_input$POS,sep=",")
+Marker_mapfile$ChromPOS=paste(Marker_mapfile$chromosome,Marker_mapfile$position,sep=",")
+genenames_location=which(VCF_input$ChromPOS%in%Marker_mapfile$ChromPOS)
+genenames=VCF_input[genenames_location,]
+
+#Find which columns end in '.AD'
+count_columns=which(grepl(".AD$",colnames(genenames)))
+counts=genenames[,count_columns]
+
+
+allele_counts=as.data.frame(cSplit(counts,1:ncol(counts),sep=",",direction="wide"))
+#remove multi-allelic columns
+allele_columns=which(grepl("_1$|_2$",colnames(allele_counts)))
+allele__both_counts=allele_counts[,allele_columns]
+
+#figure out which loci have the most reads per gene
+allele__both_counts$Sum=rowSums(allele__both_counts)
+allele__both_counts$SumA=rowSums(allele__both_counts[which(grepl("_1$",colnames(allele__both_counts)))])
+allele__both_counts$SumB=rowSums(allele__both_counts[which(grepl("_2$",colnames(allele__both_counts)))])
+allele__both_counts$symbol=Marker_mapfile$symbol
+#MAke new df which contains just the max value locus per gene
+Max_loci=allele__both_counts %>% group_by(symbol) %>% slice(which.max(Sum))
+#Split up by allele
+alleleA=as.matrix(Max_loci[which(grepl("_1$",colnames(Max_loci)))])
+alleleB=as.matrix(Max_loci[which(grepl("_2$",colnames(Max_loci)))])
+rownames(alleleA)=Max_loci$symbol
+rownames(alleleB)=Max_loci$symbol
+```
+
+```{r}
+###Quality Control
+N=apply(alleleA+alleleB,2,sum)
+lib.size=N/mean(N)
+lib.size.filter=(lib.size>0.5 & lib.size<2.5)
+alleleA=alleleA[,lib.size.filter]; alleleB=alleleB[,lib.size.filter]
+```
+
+```{r}
+###Sanity check on data heterogeneity using PCA and t-SNE
+read=alleleA+alleleB
+lib.size.factor=matrix(ncol=ncol(read),nrow=nrow(read),apply(read,2,sum)/mean(apply(read,2,sum)),byrow=T)
+read=read/lib.size.factor #adjust for sequencing depth
+AR=alleleA/(alleleA+alleleB)
+AR=AR[apply(read,1,sum)>10,]
+read=read[apply(read,1,sum)>10,]
+AR=as.matrix(AR[apply(read,1,sd)>quantile(apply(read,1,sd),0.9),]) #select for highly variable genes
+read=as.matrix(read[apply(read,1,sd)>quantile(apply(read,1,sd),0.9),])
+svd.read=svd(read)
+plot(svd.read$v[,1],svd.read$v[,2],xlab='PC1',ylab='PC2')
+scatterplot3d(svd.read$v[,1],svd.read$v[,2],svd.read$v[,3],xlab='PC1',ylab='PC2',zlab='PC3')
+```
+
+
+```{r}
+###Normalize data
+library(Linnorm)
+Transformed=Linnorm(as.matrix(alleleA))
+fTransformed=Linnorm(as.matrix(alleleA,Filter=TRUE))
+fffTransformed_A=Linnorm.Norm(as.matrix(alleleA),output="Raw")
+fffTransformed_B=Linnorm.Norm(as.matrix(alleleB),output="Raw")
+```
+
+```{r}
+##categorize each gene into being silent, monoallelelically expressed, or biallelically expressed
+gene.class.obj=gene_classify(alleleA= fffTransformed_A, alleleB=fffTransformed_B)
+A.prop=gene.class.obj$A.prop
+B.prop=gene.class.obj$B.prop
+gene.category=gene.class.obj$gene.category
+results.list=gene.class.obj$results.list
+cellsize=rep(1,ncol(alleleA))
+abkt=c(0,1,10000,0); names(abkt) = c("log(alpha)","beta","kappa","tau")
+allelic.kinetics.obj=allelic_kinetics(alleleA=alleleA,alleleB=alleleB,abkt=abkt,gene.category=gene.category,cellsize=cellsize,pdf=TRUE)
+bandwidth=allelic.kinetics.obj$bandwidth
+
+Ube3a
+
+konA=allelic.kinetics.obj$konA; konB=allelic.kinetics.obj$konB
+koffA=allelic.kinetics.obj$koffA; koffB=allelic.kinetics.obj$koffB
+sA=allelic.kinetics.obj$sA; sB=allelic.kinetics.obj$sB
+sizeA=sA/koffA;sizeB=sB/koffB
+```
+
+```{r}
+#Nonparametric test on whether two alleles share the same burst frequency and burst size
+diff.allelic.obj=diff_allelic_bursting(alleleA=alleleA,
+                                       alleleB=alleleB,
+                                       cellsize=cellsize,
+                                       gene.category=gene.category,
+                                       abkt=abkt,
+                                       allelic.kinetics.obj=allelic.kinetics.obj,
+                                       mode='corrected')
+pval.kon=diff.allelic.obj$pval.kon;pval.size=diff.allelic.obj$pval.size
+
+#Chi-square test on whether the two alleles fire independently
+non.ind.obj=non_ind_bursting(alleleA=alleleA,alleleB=alleleB,
+                             gene.category=gene.category,
+                             results.list=results.list)
+pval.ind=non.ind.obj$pval.ind;non.ind.type=non.ind.obj$non.ind.type
+```
+
+```{r}
+#Plot and output
+setwd('C:/Users/mattg/Desktop/Lab Data/West Lab/Bursting scRNAseq/')
+genename=rownames(alleleA)
+i=which(genename=='Akap8l')
+allelic_plot(alleleA=alleleA_matrix,
+             alleleB=alleleB_matrix,
+             gene.class.obj=gene.class.obj,
+             allelic.kinetics.obj=allelic.kinetics.obj,
+             diff.allelic.obj=diff.allelic.obj,
+             non.ind.obj=non.ind.obj,
+             i=i)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
