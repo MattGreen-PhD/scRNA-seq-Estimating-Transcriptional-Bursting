@@ -1,6 +1,7 @@
 # scRNA-seq-Estimating-Transcriptional-Bursting
 This pipeline is designed to generate allele-specific read counts and use the SCALE pipeline to estimate transcriptional bursting kinetics genome-wide from scRNA-seq data.
 
+Multiple scripts are necessary for each respective step in the pipeline due to the processing load. Steps are broken up to allow for individual job submissions on the cluster.
 
 Order of execution with explanation
 
